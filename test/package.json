@@ -1,0 +1,11 @@
+{
+  "name": "devbox-tests",
+  "private": true,
+  "description": "End-to-end tests for devbox in a phone-sized browser",
+  "scripts": {
+    "test": "(test -n \"$CHROMIUM_PATH\" || npx playwright install chromium) && node e2e.js && node e2e-auth.js"
+  },
+  "dependencies": {
+    "playwright": "1.49.1"
+  }
+}

@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+<title>devbox</title>
+<meta name="theme-color" content="#0e1013">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="devbox">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/icon-180.png">
+<link rel="stylesheet" href="/vendor/xterm/css/xterm.css">
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+
+<!-- Shown until /api/status answers, so a failure is never a silent hang. -->
+<div id="boot" class="boot">
+  <div class="boot-mark" aria-hidden="true">&gt;_</div>
+  <p id="boot-msg">Connecting to your Mac…</p>
+  <button id="boot-retry" class="btn" hidden>Try again</button>
+</div>
+
+<form id="login" class="login" hidden>
+  <div class="boot-mark" aria-hidden="true">&gt;_</div>
+  <h1>Sign in to devbox</h1>
+  <p class="muted">This devbox has an access code turned on. Paste it from the devbox window on your Mac.</p>
+  <label for="login-code" class="label">Access code</label>
+  <input id="login-code" class="input mono" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" required>
+  <p id="login-error" class="error-text" hidden></p>
+  <button class="btn btn-primary" type="submit">Sign in</button>
+</form>
+
+<div id="app" hidden>
+  <header class="topbar">
+    <button id="host-btn" class="host" aria-label="Connection details">
+      <span id="conn-dot" class="dot" data-state="connecting"></span>
+      <span id="host-name" class="host-name">mac</span>
+    </button>
+    <div id="top-actions" class="top-actions"></div>
+  </header>
+
+  <main class="panes">
+    <section id="pane-term" class="pane" data-pane="term"></section>
+    <section id="pane-code" class="pane" data-pane="code"></section>
+    <section id="pane-git" class="pane" data-pane="git"></section>
+    <section id="pane-run" class="pane" data-pane="run"></section>
+    <section id="pane-screen" class="pane" data-pane="screen"></section>
+  </main>
+
+  <nav class="tabbar" aria-label="Sections">
+    <button data-tab="term" aria-label="Terminal">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6l6 6-6 6M12 18h8" /></svg>
+      <span>Terminal</span>
+    </button>
+    <button data-tab="code" aria-label="Code">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 7l-5 5 5 5M16 7l5 5-5 5M14 4l-4 16" /></svg>
+      <span>Code</span>
+    </button>
+    <button data-tab="git" aria-label="Git">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="5.5" r="2.2"/><circle cx="6" cy="18.5" r="2.2"/><circle cx="18" cy="8" r="2.2"/><path d="M6 7.7v8.6M18 10.2c0 4-6 3-11 6.5"/></svg>
+      <span>Git</span><i class="badge-dot" id="git-badge" hidden></i>
+    </button>
+    <button data-tab="run" aria-label="Run">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 5l12 7-12 7z"/></svg>
+      <span>Run</span><i class="badge-dot" id="run-badge" hidden></i>
+    </button>
+    <button data-tab="screen" aria-label="Screen">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="12" rx="1.5" /><path d="M9 20h6M12 16v4" /></svg>
+      <span>Screen</span>
+    </button>
+  </nav>
+</div>
+
+<div id="sheet-root"></div>
+<div id="toast-root" aria-live="polite"></div>
+
+<script src="/vendor/xterm/lib/xterm.js"></script>
+<script src="/vendor/xterm-fit/lib/addon-fit.js"></script>
+<script src="/vendor/xterm-links/lib/addon-web-links.js"></script>
+<script type="module" src="/js/main.js"></script>
+</body>
+</html>

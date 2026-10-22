@@ -1,0 +1,5 @@
+node_modules/
+test/node_modules/
+test/.run/
+.DS_Store
+*.log
