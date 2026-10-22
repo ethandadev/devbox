@@ -1,4 +1,5 @@
 import { api, qs, h, icon, iconButton, key, menu, prompt, confirm, store, toast, copyText, sheet, splitPath, fileIcon } from './ui.js';
+import { Smarts, SEMANTIC_THEME_RULES } from './smarts.js';
 
 const SAVE_DELAY = 1000;     // autosave this long after you stop typing
 const POLL_MS = 4000;        // check the open file for changes made on the Mac
@@ -68,6 +69,40 @@ export function loadMonaco(onProgress) {
   return monacoPromise;
 }
 
+// How to run a file, by type. Gets the file name (run from its folder).
+const q = (s) => `'${s.replace(/'/g, "'\\''")}'`;
+const RUNNERS = [
+  [/\.py$/i, (f) => `python3 ${q(f)}`],
+  [/\.(js|mjs|cjs)$/i, (f) => `node ${q(f)}`],
+  [/\.tsx?$/i, (f) => `npx --yes tsx ${q(f)}`],
+  [/\.(sh|bash)$/i, (f) => `bash ${q(f)}`],
+  [/\.zsh$/i, (f) => `zsh ${q(f)}`],
+  [/\.rb$/i, (f) => `ruby ${q(f)}`],
+  [/\.go$/i, (f) => `go run ${q(f)}`],
+  [/\.rs$/i, (f) => `if [ -f Cargo.toml ] || [ -f ../Cargo.toml ]; then cargo run; else rustc ${q(f)} -o /tmp/devbox-run && /tmp/devbox-run; fi`],
+  [/\.c$/i, (f) => `cc -O0 -g -Wall ${q(f)} -o /tmp/devbox-run && /tmp/devbox-run`],
+  [/\.(cpp|cc|cxx|c\+\+)$/i, (f) => `c++ -std=c++20 -O0 -g -Wall ${q(f)} -o /tmp/devbox-run && /tmp/devbox-run`],
+  [/\.m$/i, (f) => `clang -fobjc-arc -framework Foundation ${q(f)} -o /tmp/devbox-run && /tmp/devbox-run`],
+  [/\.swift$/i, (f) => `swift ${q(f)}`],
+  [/\.java$/i, (f) => `java ${q(f)}`],
+  [/\.kts?$/i, (f) => `kotlinc -script ${q(f)}`],
+  [/\.php$/i, (f) => `php ${q(f)}`],
+  [/\.lua$/i, (f) => `lua ${q(f)}`],
+  [/\.pl$/i, (f) => `perl ${q(f)}`],
+  [/\.r$/i, (f) => `Rscript ${q(f)}`],
+  [/\.dart$/i, (f) => `dart run ${q(f)}`],
+  [/\.zig$/i, (f) => `zig run ${q(f)}`],
+  [/\.ex(s)?$/i, (f) => `elixir ${q(f)}`],
+  [/\.(cs)$/i, (f) => `dotnet run`],
+  [/^makefile$/i, () => 'make'],
+  [/\.html?$/i, null],
+];
+export function runCommandFor(path) {
+  const name = path.split('/').pop();
+  for (const [re, fn] of RUNNERS) if (re.test(name)) return fn;
+  return null;
+}
+
 const IMAGE_EXT = /\.(png|jpe?g|gif|webp|bmp|ico|avif|heic)$/i;
 const join = (...parts) => parts.filter(Boolean).join('/').replace(/\/+/g, '/');
 const parentOf = (p) => p.split('/').slice(0, -1).join('/');
@@ -84,6 +119,7 @@ export class CodePane {
     ctx.project.onChange((p) => { this.workspace = p; if (this.el.classList.contains('drawer-open')) this.renderTree(); });
     this.expanded = new Set(store.get('code.expanded', []));
     this.showHidden = store.get('code.hidden', false);
+    this.dirCache = new Map();   // folder path -> { entries, sig }
     this.visible = false;
 
     // top bar: save state
@@ -95,6 +131,7 @@ export class CodePane {
     // head: explorer toggle + tabs
     this.tabsEl = h('div', { class: 'tabs', role: 'tablist' });
     this.head = h('div', { class: 'code-head' }, iconButton('files', 'Files', () => this.toggleDrawer()), this.tabsEl,
+      this.runBtn = iconButton('play', 'Run this file', () => this.runFile(), { class: 'end run-btn' }),
       iconButton('search', 'Search files', () => this.searchSheet(), { class: 'end' }));
 
     // conflict banner
@@ -117,7 +154,9 @@ export class CodePane {
     this.sbPos = h('button', { class: 'sb-item', type: 'button', onclick: () => this.gotoLine() });
     this.sbIndent = h('span', { class: 'sb-item' });
     this.sbBranch = h('button', { class: 'sb-item sb-branch', type: 'button', onclick: () => ctx.switchTab('git') });
-    this.statusBar = h('div', { class: 'status-bar', hidden: true }, this.sbBranch, h('span', { class: 'sb-gap' }), this.sbPos, this.sbIndent, this.sbLang);
+    this.sbProblems = h('button', { class: 'sb-item sb-problems', type: 'button', onclick: () => this.problemsSheet() });
+    this.sbSmarts = h('button', { class: 'sb-item sb-smarts', type: 'button', onclick: () => this.smartsSheet() });
+    this.statusBar = h('div', { class: 'status-bar', hidden: true }, this.sbBranch, this.sbProblems, h('span', { class: 'sb-gap' }), this.sbPos, this.sbIndent, this.sbSmarts, this.sbLang);
 
     // drawer
     this.crumbs = h('div', { class: 'crumbs' });
@@ -173,7 +212,7 @@ export class CodePane {
       }
       this.monaco = monaco;
       monaco.editor.defineTheme('devbox', {
-        base: 'vs-dark', inherit: true, rules: [],
+        base: 'vs-dark', inherit: true, rules: SEMANTIC_THEME_RULES,
         colors: {
           'editor.background': '#0e1013',
           'editor.lineHighlightBackground': '#161a1f',
@@ -211,8 +250,18 @@ export class CodePane {
         stickyScroll: { enabled: !phone },
         padding: { top: 8 },
         tabSize: 2,
+        'semanticHighlighting.enabled': true,
+        quickSuggestions: { other: true, comments: false, strings: false },
+        suggest: { showWords: true, preview: true },
+        inlayHints: { enabled: 'off' },
       });
+      this.smarts = new Smarts(monaco, this);
+      this.smarts.onChange(() => this.updateStatusBar());
+      monaco.editor.onDidChangeMarkers(() => this.updateStatusBar());
       this.editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => this.save(this.active, { now: true }));
+      // iOS autocorrect / predictive text inserts duplicated words in code.
+      const ta = this.editorHost.querySelector('textarea');
+      if (ta) for (const [k, v] of Object.entries({ autocorrect: 'off', autocapitalize: 'off', autocomplete: 'off', spellcheck: 'false' })) ta.setAttribute(k, v);
       this.editor.onDidChangeCursorPosition(() => this.updateStatusBar());
       this.editor.onDidChangeModel(() => this.updateStatusBar());
       this.loading.hidden = true;
@@ -271,6 +320,8 @@ export class CodePane {
     const model = this.monaco.editor.createModel(data.content, this.languageFor(path), uri);
     const f = { path, model, mtime: data.mtime, savedVersion: model.getAlternativeVersionId(), timer: null, saving: false, conflict: null, viewState: null };
     model.onDidChangeContent(() => this.onEdit(f));
+    if (this.smarts) this.smarts.attach(model, path);
+    this.remember(path);
     this.files.set(path, f);
     if (!this.order.includes(path)) this.order.push(path);
     this.persistTabs();
@@ -322,7 +373,7 @@ export class CodePane {
     if (this.isDirty(f)) await this.save(path, { now: true });
     if (this.isDirty(f) && !(await confirm(`Close ${baseName(path)}?`, 'Your latest changes could not be saved to the Mac.', { ok: 'Close anyway', danger: true }))) return;
     clearTimeout(f.timer);
-    if (f.model) f.model.dispose();
+    if (f.model) { if (this.smarts) this.smarts.detach(f.model); f.model.dispose(); }
     this.files.delete(path);
     const i = this.order.indexOf(path);
     this.order.splice(i, 1);
@@ -360,6 +411,21 @@ export class CodePane {
     this.sbIndent.textContent = o.insertSpaces ? `Spaces: ${o.indentSize}` : `Tab: ${o.tabSize}`;
     const lang = this.monaco.languages.getLanguages().find((l) => l.id === f.model.getLanguageId());
     this.sbLang.textContent = (lang && lang.aliases && lang.aliases[0]) || f.model.getLanguageId();
+    // Problems (errors / warnings) in this file.
+    const markers = this.monaco.editor.getModelMarkers({ resource: f.model.uri });
+    const errs = markers.filter((m) => m.severity === this.monaco.MarkerSeverity.Error).length;
+    const warns = markers.filter((m) => m.severity === this.monaco.MarkerSeverity.Warning).length;
+    this.sbProblems.replaceChildren(h('span', { class: errs ? 'sb-err' : '' }, `⊗ ${errs}`), h('span', { class: warns ? 'sb-warn' : '' }, `⚠ ${warns}`));
+    // Language server status.
+    const st = this.smarts && this.smarts.status(f.model);
+    this.sbSmarts.hidden = !st;
+    if (st) {
+      const name = st.server ? st.server.name : 'smarts';
+      const label = st.state === 'ready' ? `● ${name}` : st.state === 'starting' ? `○ ${name}…` : st.state === 'missing' ? '○ Basic' : `○ ${name} off`;
+      this.sbSmarts.textContent = label;
+      this.sbSmarts.className = `sb-item sb-smarts state-${st.state}`;
+    }
+    this.runBtn.classList.toggle('dim', !runCommandFor(f.path));
     this.sbBranch.hidden = !this.branch;
     this.sbBranch.replaceChildren(icon('branch'), h('span', {}, this.branch || ''));
   }
@@ -426,6 +492,14 @@ export class CodePane {
     if (f.conflict && !force) return;
     f.saving = true;
     this.updateSaveState();
+    if (store.get('code.formatOnSave', false) && !force && this.active === path && !f.formatting) {
+      const action = this.editor.getAction('editor.action.formatDocument');
+      if (action && action.isSupported()) {
+        f.formatting = true;
+        try { await action.run(); } catch {}
+        f.formatting = false;
+      }
+    }
     const version = f.model.getAlternativeVersionId();
     try {
       const r = await api('/api/fs/write?' + qs({ path, baseMtime: f.mtime, ...(force ? { force: 1 } : {}) }), { method: 'PUT', body: f.model.getValue(), timeout: 20000 });
@@ -434,6 +508,7 @@ export class CodePane {
       f.conflict = null;
       f.error = null;
       window.dispatchEvent(new CustomEvent('devbox:saved', { detail: { path } }));
+      if (this.smarts) this.smarts.saved(path);
     } catch (e) {
       if (e.status === 409) { f.conflict = 'changed'; }
       else { f.error = e.message; f.timer = setTimeout(() => this.save(path), 4000); }
@@ -523,6 +598,7 @@ export class CodePane {
       key(icon('undo'), ed((e) => e.trigger('keys', 'undo', null)), { cls: 'mod', title: 'Undo', repeat: true }),
       key(icon('redo'), ed((e) => e.trigger('keys', 'redo', null)), { cls: 'mod', title: 'Redo', repeat: true }),
       key(icon('search'), ed((e) => e.getAction('actions.find').run()), { cls: 'mod', title: 'Find' }),
+      key('//', ed((e) => e.getAction('editor.action.commentLine').run()), { cls: 'mod', title: 'Toggle comment' }),
       h('span', { class: 'sep' }),
       key('tab', ed((e) => e.trigger('keys', 'tab', null)), { cls: 'mod' }),
       key('⇤', ed((e) => e.trigger('keys', 'outdent', null)), { cls: 'mod', title: 'Outdent' }),
@@ -567,20 +643,71 @@ export class CodePane {
     this.crumbs.replaceChildren(...items);
   }
 
-  async renderTree() {
+  // ---------- file tree (instant from cache, refreshed in the background) ----------
+  cacheDir(path, entries) {
+    const prev = this.dirCache.get(path);
+    const sig = JSON.stringify(entries);
+    this.dirCache.set(path, { entries, sig });
+    return !prev || prev.sig !== sig;
+  }
+
+  async fetchDir(dir) {
+    const data = await api('/api/fs/list?' + qs({ path: dir, ahead: 1 }));
+    const changed = this.cacheDir(dir, data.entries);
+    for (const [p, entries] of Object.entries(data.ahead || {})) if (!this.dirCache.has(p) || p !== dir) this.cacheDir(p, entries);
+    return changed;
+  }
+
+  renderTree() {
     this.renderCrumbs();
+    const scroll = this.tree.scrollTop;
     const frag = document.createDocumentFragment();
-    await this.renderDir(this.workspace, 0, frag);
+    this.renderDir(this.workspace, 0, frag);
     this.tree.replaceChildren(frag);
+    this.tree.scrollTop = scroll;
+    this.highlightTree();
+    this.refreshTree();
+  }
+
+  // Re-read the root and every open folder in one request; redraw if anything changed.
+  async refreshTree() {
+    const paths = [this.workspace, ...[...this.expanded].filter((p) => !this.workspace || p === this.workspace || p.startsWith(this.workspace + '/'))];
+    const seq = (this.treeSeq = (this.treeSeq || 0) + 1);
+    try {
+      let changed = false;
+      if (!this.dirCache.has(this.workspace)) { await this.fetchDir(this.workspace); changed = true; }
+      const { lists } = await api('/api/fs/lists', { method: 'POST', json: { paths } });
+      for (const [p, entries] of Object.entries(lists)) {
+        if (Array.isArray(entries)) changed = this.cacheDir(p, entries) || changed;
+        else if (this.dirCache.has(p)) { this.dirCache.delete(p); changed = true; }
+      }
+      // Warm the level below the root for instant expanding.
+      this.fetchDir(this.workspace).then((c) => { if (c && seq === this.treeSeq) this.redrawTree(); }).catch(() => {});
+      if (changed && seq === this.treeSeq) this.redrawTree();
+    } catch (e) {
+      if (!this.dirCache.has(this.workspace)) this.tree.replaceChildren(h('div', { class: 'tree-msg' }, e.message));
+    }
+  }
+
+  redrawTree() {
+    if (!this.el.classList.contains('drawer-open')) return;
+    const scroll = this.tree.scrollTop;
+    const frag = document.createDocumentFragment();
+    this.renderDir(this.workspace, 0, frag);
+    this.tree.replaceChildren(frag);
+    this.tree.scrollTop = scroll;
     this.highlightTree();
   }
 
-  async renderDir(dir, depth, into) {
-    let data;
-    try { data = await api('/api/fs/list?' + qs({ path: dir })); }
-    catch (e) { into.append(h('div', { class: 'tree-msg', style: `padding-left:${34 + depth * 14}px` }, e.message)); return; }
-    const entries = data.entries.filter((e) => this.showHidden || !e.hidden);
-    if (!entries.length) into.append(h('div', { class: 'tree-msg', style: `padding-left:${34 + depth * 14}px` }, 'Empty folder'));
+  renderDir(dir, depth, into) {
+    const cached = this.dirCache.get(dir);
+    const pad = `padding-left:${34 + depth * 14}px`;
+    if (!cached) {
+      into.append(h('div', { class: 'tree-msg loading', style: pad }, 'Loading…'));
+      return;
+    }
+    const entries = cached.entries.filter((e) => this.showHidden || !e.hidden);
+    if (!entries.length) into.append(h('div', { class: 'tree-msg', style: pad }, 'Empty folder'));
     for (const e of entries) {
       const path = join(dir, e.name);
       const isDir = e.type === 'dir';
@@ -596,25 +723,33 @@ export class CodePane {
       into.append(row);
       if (open) {
         const kids = h('div', { dataset: { children: path } });
-        await this.renderDir(path, depth + 1, kids);
+        this.renderDir(path, depth + 1, kids);
         into.append(kids);
       }
     }
   }
 
   async toggleFolder(path, row, depth) {
-    const kids = this.tree.querySelector(`[data-children="${CSS.escape(path)}"]`);
+    const existing = this.tree.querySelector(`[data-children="${CSS.escape(path)}"]`);
     if (this.expanded.has(path)) {
       this.expanded.delete(path);
       row.classList.remove('open');
-      if (kids) kids.remove();
+      const ic = row.querySelector('svg.ficon'); if (ic) ic.classList.remove('open');
+      if (existing) existing.remove();
     } else {
       this.expanded.add(path);
       row.classList.add('open');
+      const ic = row.querySelector('svg.ficon'); if (ic) ic.classList.add('open');
       const box = h('div', { dataset: { children: path } });
       row.after(box);
-      await this.renderDir(path, depth + 1, box);
+      this.renderDir(path, depth + 1, box);       // instant when read ahead
       this.highlightTree();
+      try {
+        const changed = await this.fetchDir(path);   // refresh + read the next level ahead
+        if (changed && box.isConnected) { const fresh = document.createDocumentFragment(); this.renderDir(path, depth + 1, fresh); box.replaceChildren(fresh); this.highlightTree(); }
+      } catch (e) {
+        if (box.isConnected) box.replaceChildren(h('div', { class: 'tree-msg', style: `padding-left:${34 + (depth + 1) * 14}px` }, e.message));
+      }
     }
     store.set('code.expanded', [...this.expanded].slice(-200));
   }
@@ -720,6 +855,13 @@ export class CodePane {
     const wrap = this.editor ? this.editor.getOption(this.monaco.editor.EditorOption.wordWrap) : 'on';
     const text = f && f.model;
     const choice = await menu(f ? baseName(f.path) : 'Editor', [
+      f ? { label: 'Run this file', value: 'run', icon: 'play', sub: runCommandFor(f.path) ? '' : 'not runnable' } : null,
+      f && /\.(md|markdown|mdx)$/i.test(f.path) ? { label: 'Preview Markdown', value: 'mdpreview', icon: 'eye' } : null,
+      f && /\.html?$/i.test(f.path) ? { label: 'Open page in browser', value: 'htmlpreview', icon: 'globe' } : null,
+      text ? { label: 'Go to symbol…', value: 'symbol', icon: 'search', sub: 'functions, classes' } : null,
+      text ? { label: 'Go to definition', value: 'definition', icon: 'external' } : null,
+      text ? { label: 'Rename symbol…', value: 'rename', icon: 'text' } : null,
+      text ? { label: 'Problems', value: 'problems', icon: 'x' } : null,
       text ? { label: 'All commands…', value: 'palette', icon: 'command', sub: 'like ⇧⌘P' } : null,
       text ? { label: 'Format document', value: 'format', icon: 'text' } : null,
       text ? { label: 'Go to line…', value: 'goto', icon: 'down' } : null,
@@ -734,7 +876,14 @@ export class CodePane {
       f ? { label: 'Close file', value: 'close', icon: 'x' } : null,
     ]);
     if (!choice) return;
-    if (choice === 'palette') { this.editor.focus(); this.editor.trigger('menu', 'editor.action.quickCommand', null); }
+    if (choice === 'run') this.runFile();
+    else if (choice === 'mdpreview') this.markdownPreview(f.path);
+    else if (choice === 'htmlpreview') window.open('/files/' + f.path.split('/').map(encodeURIComponent).join('/'), '_blank', 'noopener');
+    else if (choice === 'symbol') { this.editor.focus(); this.editor.trigger('menu', 'editor.action.quickOutline', null); }
+    else if (choice === 'definition') { this.editor.focus(); this.editor.trigger('menu', 'editor.action.revealDefinition', null); }
+    else if (choice === 'rename') { this.editor.focus(); this.editor.trigger('menu', 'editor.action.rename', null); }
+    else if (choice === 'problems') this.problemsSheet();
+    else if (choice === 'palette') { this.editor.focus(); this.editor.trigger('menu', 'editor.action.quickCommand', null); }
     else if (choice === 'format') {
       const action = this.editor.getAction('editor.action.formatDocument');
       if (action && action.isSupported()) { await action.run(); toast('Formatted'); }
@@ -749,6 +898,101 @@ export class CodePane {
     } else if (choice === 'wrap') this.setWordWrap(wrap === 'off');
     else if (choice === 'bigger' || choice === 'smaller') this.setFontSize(Math.max(10, Math.min(24, size + (choice === 'bigger' ? 1 : -1))));
     else if (choice === 'close') this.close(f.path);
+  }
+
+  // ---------- developer tools ----------
+  remember(path) {
+    const recent = store.get('code.recent', []).filter((p) => p !== path);
+    recent.unshift(path);
+    store.set('code.recent', recent.slice(0, 30));
+  }
+
+  async runFile() {
+    const f = this.active && this.files.get(this.active);
+    if (!f) { toast('Open a file to run it.'); return; }
+    const cmd = runCommandFor(f.path);
+    if (!cmd) { toast(`devbox doesn't know how to run ${baseName(f.path)}. Run it from the terminal.`); return; }
+    if (f.model && this.isDirty(f)) await this.save(f.path, { now: true });
+    const dir = f.path.split('/').slice(0, -1).join('/');
+    const term = this.ctx.panes().term;
+    this.ctx.switchTab('term');
+    term.runInNamedSession(`▶ ${baseName(f.path)}`, dir, cmd(baseName(f.path)));
+  }
+
+  problemsSheet() {
+    const monaco = this.monaco;
+    if (!monaco) return;
+    const S = monaco.MarkerSeverity;
+    const all = monaco.editor.getModelMarkers({}).filter((m) => m.severity >= S.Warning)
+      .sort((a, b) => b.severity - a.severity || a.resource.path.localeCompare(b.resource.path) || a.startLineNumber - b.startLineNumber);
+    sheet((panel, done) => {
+      panel.classList.add('sheet-tall');
+      const list = h('div', { class: 'results' });
+      if (!all.length) list.append(h('p', { class: 'pane-msg' }, 'No problems in your open files.'));
+      for (const m of all.slice(0, 300)) {
+        const rel = m.resource.path.replace(/^\//, '');
+        list.append(h('button', { class: 'result problem', type: 'button', onclick: () => { done(null); this.reveal(rel, m.startLineNumber, m.startColumn); } },
+          h('span', { class: m.severity === S.Error ? 'p-err' : 'p-warn' }, m.severity === S.Error ? '⊗' : '⚠'),
+          h('span', { class: 'p-text' }, h('b', {}, m.message), h('small', {}, `${baseName(rel)}:${m.startLineNumber}${m.source ? ' · ' + m.source : ''}`))));
+      }
+      panel.append(h('h3', {}, `Problems${all.length ? ` (${all.length})` : ''}`), list);
+    });
+  }
+
+  smartsSheet() {
+    const f = this.active && this.files.get(this.active);
+    const st = f && f.model && this.smarts.status(f.model);
+    if (!st) return;
+    const srv = st.server || {};
+    sheet((panel, done) => {
+      const lang = srv.label || st.group;
+      if (st.state === 'ready') {
+        panel.append(h('h3', {}, `${srv.name} is running`), h('p', {}, `Full ${lang} support: completion, errors, hover, go to definition, rename, formatting and semantic highlighting.`),
+          h('p', { class: 'mono small' }, srv.path || ''),
+          h('div', { class: 'actions' }, h('button', { class: 'btn', type: 'button', onclick: () => { done(null); this.restartSmarts(); } }, 'Restart'), h('button', { class: 'btn btn-primary', type: 'button', onclick: () => done(null) }, 'OK')));
+      } else if (st.state === 'missing') {
+        panel.append(h('h3', {}, `Smarter ${lang}`),
+          h('p', {}, `Right now you get basic highlighting. Install ${srv.name} on your Mac for full completion, errors, go to definition and exact highlighting of your own classes and functions.`),
+          srv.installNote ? h('p', {}, srv.installNote) : null,
+          h('code', { class: 'cmd' }, srv.install || ''),
+          h('div', { class: 'actions' },
+            h('button', { class: 'btn', type: 'button', onclick: async () => { done(null); await this.smarts.loadServers(); this.restartSmarts(); } }, 'I installed it'),
+            h('button', { class: 'btn btn-primary', type: 'button', onclick: () => { done(null); this.ctx.switchTab('term'); this.ctx.panes().term.openSession({ cmd: srv.install, name: `install ${srv.name}` }); } }, 'Install in terminal')));
+      } else {
+        const why = st.client && st.client.exitInfo && st.client.exitInfo.stderr;
+        panel.append(h('h3', {}, `${srv.name || 'Language server'} ${st.state === 'starting' ? 'is starting' : 'stopped'}`),
+          why ? h('pre', { class: 'cmd small' }, why) : h('p', {}, st.state === 'starting' ? 'Large projects can take a moment to index.' : 'It may have crashed. Restart it to try again.'),
+          h('div', { class: 'actions' }, h('button', { class: 'btn btn-primary', type: 'button', onclick: () => { done(null); this.restartSmarts(); } }, 'Restart')));
+      }
+    });
+  }
+
+  async restartSmarts() {
+    for (const c of this.smarts.clients.values()) c.close();
+    this.smarts.clients.clear();
+    await this.smarts.loadServers();
+    for (const f of this.files.values()) if (f.model) this.smarts.attach(f.model, f.path, true);
+  }
+
+  async markdownPreview(path) {
+    const f = this.files.get(path);
+    if (!f || !f.model) return;
+    if (!this._marked) {
+      // ESM build: the UMD one gets swallowed by Monaco's AMD loader and never sets a global.
+      this._marked = await import('/vendor/marked/lib/marked.esm.js').then((m) => m.marked || m.default).catch(() => null);
+    }
+    const marked = this._marked;
+    if (!marked) { toast('Couldn\'t load the Markdown previewer.', 'bad'); return; }
+    const body = h('article', { class: 'md-body' });
+    const render = () => { body.innerHTML = marked.parse(f.model.getValue(), { gfm: true, breaks: false }); body.querySelectorAll('script').forEach((x) => x.remove()); };
+    render();
+    const sub = f.model.onDidChangeContent(() => render());
+    const overlay = h('div', { class: 'overlay md-overlay' },
+      h('div', { class: 'overlay-head' },
+        iconButton('x', 'Close preview', () => { sub.dispose(); overlay.remove(); }),
+        h('div', { class: 'oh-title' }, h('b', {}, baseName(path)), h('small', {}, 'Markdown preview'))),
+      h('div', { class: 'md-scroll' }, body));
+    this.el.append(overlay);
   }
 
   // ---------- search & quick open ----------
@@ -798,6 +1042,18 @@ export class CodePane {
           info.textContent = 'Searching…';
           try {
             if (mode === 'files') {
+              if (!q) {
+                const recent = store.get('code.recent', []).filter((p) => !scope || p.startsWith(scope + '/'));
+                if (recent.length) {
+                  info.textContent = 'Recently opened';
+                  results.replaceChildren(...recent.slice(0, 20).map((p) => {
+                    const rel = scope ? p.slice(scope.length + 1) : p;
+                    const [dir, name] = splitPath(rel);
+                    return h('button', { class: 'result', type: 'button', onclick: () => pick(p) }, fileIcon(name), h('span', { class: 'r-name' }, name), h('span', { class: 'r-dir' }, dir));
+                  }));
+                  return;
+                }
+              }
               const r = await api('/api/search/files?' + qs({ path: scope, q }));
               if (my !== seq) return;
               info.textContent = r.results.length ? (q ? `${r.results.length === 60 ? 'Top 60' : r.results.length} of ${r.total} files` : `${r.total} files · type to filter`) : `No files match “${q}”.`;

@@ -473,6 +473,15 @@ export class TerminalPane {
     this.raw(cmd + '\r');
   }
 
+  // Used by "Run this file": reuse one terminal per file, so runs don't pile up.
+  async runInNamedSession(name, cwd, cmd) {
+    try {
+      const list = await api('/api/terminals');
+      for (const t of list) if (t.name === name) await api('/api/terminals/' + t.id, { method: 'DELETE' }).catch(() => {});
+    } catch {}
+    this.openSession({ cwd, cmd, name });
+  }
+
   // Used by Run: a fresh terminal in a folder, running a command.
   openSession({ cwd = '', cmd = '', name = '' } = {}) {
     this.pendingNew = { cwd, cmd, name };

@@ -117,7 +117,7 @@ const httpGet = (url) => new Promise((ok) => http.get(url, (r) => { let b = ''; 
   await shot('10-editor');
 
   // quick open
-  await page.tap('.code-head .icon-btn.end');
+  await page.tap('.code-head .icon-btn.end:not(.run-btn)');
   await waitFor(() => page.isVisible('.sheet .seg'));
   await page.locator('.seg button:text-is("Files")').tap();
   await page.fill('.sheet input[type=search]', 'apts');
@@ -127,7 +127,7 @@ const httpGet = (url) => new Promise((ok) => http.get(url, (r) => { let b = ''; 
   check('quick open opens the file', await waitFor(() => page.isVisible('.tab.active .name:text-is("app.ts")')));
 
   // text search -> jumps to the line
-  await page.tap('.code-head .icon-btn.end');
+  await page.tap('.code-head .icon-btn.end:not(.run-btn)');
   await page.locator('.seg button', { hasText: 'Text in files' }).tap();
   await page.fill('.sheet input[type=search]', 'return n');
   check('text search finds matches', await waitFor(() => page.isVisible('.result.hit mark')));
@@ -154,6 +154,47 @@ const httpGet = (url) => new Promise((ok) => http.get(url, (r) => { let b = ''; 
   await page.setInputFiles('#pane-code input[type=file]', `${T}/from-phone.txt`);
   check('uploads files from the phone', await waitFor(() => fs.existsSync(`${P}/from-phone.txt`) && fs.readFileSync(`${P}/from-phone.txt`, 'utf8') === 'uploaded!'));
   await page.tap('.drawer-scrim').catch(() => {});
+
+  // ---------- developer tools ----------
+  // folders open instantly (read ahead), no waiting on the network
+  const openDrawer = async () => { if (!(await page.$eval('#pane-code', (e) => e.classList.contains('drawer-open')))) await page.tap('.code-head .icon-btn:first-child'); };
+  await openDrawer();
+  await waitFor(() => page.isVisible('.node .label:text-is("src")'));
+  await sleep(400);
+  const t0 = Date.now();
+  await page.locator('.node .label:text-is("src")').tap();
+  await page.waitForSelector('.node .label:text-is("app.ts")', { timeout: 3000 });
+  check('subfolders open instantly from read-ahead', Date.now() - t0 < 350, `${Date.now() - t0} ms`);
+  await page.locator('.node .label:text-is("README.md")').tap();
+  await waitFor(() => page.isVisible('.tab.active .name:text-is("README.md")'));
+  await page.tap('[data-for=code] .icon-btn');
+  await page.locator('.menu button', { hasText: 'Preview Markdown' }).tap();
+  check('Markdown preview renders', await waitFor(() => page.$eval('.md-body h1', (e) => e.textContent === 'Project')));
+  await page.tap('.md-overlay .icon-btn[aria-label="Close preview"]');
+  const filesRoute = await page.evaluate(async () => (await fetch('/files/project/README.md')).status);
+  check('files are served for HTML preview', filesRoute === 200, String(filesRoute));
+  // problems from the JSON language service
+  fs.writeFileSync(`${P}/bad.json`, '{ "name": "demo", "list": [1, 2, }\n');
+  await openDrawer();
+  await page.tap('.drawer .icon-btn[aria-label=Refresh]');
+  await page.locator('.node .label:text-is("bad.json")').tap();
+  check('errors show in the status bar', await waitFor(() => page.$eval('.sb-problems', (e) => !/⊗ 0/.test(e.textContent)), 10000), await page.$eval('.sb-problems', (e) => e.textContent).catch(() => ''));
+  await page.tap('.sb-problems');
+  check('problems list shows the error', await waitFor(() => page.isVisible('.result.problem')));
+  await page.locator('.result.problem').first().tap();
+  // run the current file in its own terminal
+  await openDrawer();
+  await page.locator('.node .label:text-is("hello.py")').tap();
+  await waitFor(() => page.isVisible('.tab.active .name:text-is("hello.py")'));
+  await page.tap('.code-head .run-btn');
+  check('▶ runs the file in a terminal', await waitFor(async () => (await page.$eval('#pane-term .xterm-rows', (e) => e.innerText)).includes('hello phone'), 10000));
+  check('run terminal is named after the file', await page.$eval('#title-main', (e) => e.textContent.includes('hello.py')));
+  await tab('code');
+  await page.tap('.code-head .icon-btn.end:not(.run-btn)');
+  await waitFor(() => page.isVisible('.sheet .seg'));
+  await page.locator('.seg button:text-is("Files")').tap();
+  check('quick open lists recently opened files', await waitFor(() => page.$eval('.results-info', (e) => e.textContent === 'Recently opened')));
+  await page.tap('.sheet-scrim', { position: { x: 10, y: 10 } });
 
   // ---------- git ----------
   await tab('git');

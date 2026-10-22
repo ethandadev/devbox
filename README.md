@@ -94,6 +94,10 @@ To require an access code anyway, start with `DEVBOX_AUTH=1 npm start` (or set y
 - File browser: ⋯ on a folder → **Open this folder** makes it your project. Code, Git and Run all follow the project you pick.
 - If a file changes on the Mac while it's open, the editor reloads it. If you also had unsaved edits, it asks which version to keep.
 - Deleted files go to the Mac's Trash.
+- **Language smarts** (errors, autocomplete, hover, go to definition, rename, real colors for your own classes) come from the same language servers VS Code uses. devbox finds them on the Mac and the status bar shows their state. If one is missing, tap the status bar for a one-tap install command (for C/C++: `brew install llvm`; Python: `npm install -g pyright`; also Go, Rust, Swift, shell, Ruby, PHP, Lua, Java, Kotlin, Zig, Dart). Without a server, a built-in highlighter still colors classes and functions.
+- ▶ **Run this file** picks a command by file type (Python, Node, Go, Rust, C/C++, Swift, shell and more) and runs it in its own terminal.
+- ⋯ → **Preview Markdown**, **Open page in browser** (HTML), **Go to symbol**, **Problems**, **Rename symbol**.
+- Folders open instantly: devbox reads the next level ahead and remembers what you opened.
 
 **Git**
 - Tap a file to see its diff, then Stage or Discard it.
@@ -110,6 +114,10 @@ To require an access code anyway, start with `DEVBOX_AUTH=1 npm start` (or set y
 - ⋯ → **Paste text on the Mac** sends text to the Mac's clipboard and presses ⌘V. It's the fastest way to type a lot.
 - If macOS asks for a permission on the Mac (like "node would like to access your Documents folder"), you can answer it from here.
 
+**Light screen (one window, few bytes)**
+- On the Screen tab, switch **Live** to **Light**. Light streams one app window as a single picture that only updates when something changes. It's far lighter than full VNC on a slow network.
+- ⋯ → **Choose window** lists the windows open on the Mac. Quality and size adjust to your connection; tap to click, type with the keyboard button.
+
 **Clipboard:** tap the Mac name at the top left to copy the Mac's clipboard or send text to it.
 
 ## Settings
@@ -122,6 +130,7 @@ To require an access code anyway, start with `DEVBOX_AUTH=1 npm start` (or set y
 | `DEVBOX_KEEP_AWAKE` | `1` | `0` lets the Mac sleep normally |
 | `DEVBOX_AUTH` / `DEVBOX_TOKEN` | off | Require an access code |
 | `HOST` | Tailscale + localhost | Force one address (e.g. `0.0.0.0`; not recommended without an access code) |
+| `DEVBOX_LSP` | on | `0` turns language servers off |
 | `VNC_PORT` | `5900` | Screen Sharing port |
 
 ## Troubleshooting

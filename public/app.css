@@ -32,10 +32,12 @@
 }
 
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
-html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font: 15px/1.45 var(--ui); overscroll-behavior: none; }
+html, body { margin: 0; height: 100%; background: var(--bg-raised); color: var(--text); font: 15px/1.45 var(--ui); overscroll-behavior: none; }
 body { overflow: hidden; position: fixed; inset: 0; }
 [hidden] { display: none !important; }
-button { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; }
+button { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+.topbar, .tabbar, .keybar, .code-head, .status-bar, .section-head, .drawer-head, .overlay-head, .pane-bar { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+.scroll-pane, .tree, .results, .sheet, .screen-setup, .tabs, .keybar { overscroll-behavior: contain; }
 button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .mono { font-family: var(--mono); }
 .muted { color: var(--muted); }
@@ -74,9 +76,13 @@ svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width:
 .check input { width: 20px; height: 20px; accent-color: var(--accent); }
 
 /* ---------- app frame ---------- */
+/* The page background matches the top bar and tab bar, so the strips iOS
+   draws above and below a home-screen app blend in instead of showing as
+   dark bars. */
 #app {
-  position: fixed; left: 0; right: 0; top: 0; height: var(--app-h);
-  display: grid; grid-template-rows: auto 1fr auto; background: var(--bg);
+  position: fixed; inset: 0;
+  display: grid; grid-template-rows: auto 1fr auto; background: var(--bg-raised);
+  will-change: transform;
 }
 .topbar {
   display: flex; align-items: center; gap: 4px; min-height: 52px;
@@ -105,7 +111,7 @@ svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width:
 .save-state[data-state="dirty"], .save-state[data-state="saving"] { color: var(--warn); }
 .save-state[data-state="error"], .save-state[data-state="conflict"] { color: var(--bad); }
 
-.panes { position: relative; min-height: 0; overflow: hidden; }
+.panes { position: relative; min-height: 0; overflow: hidden; background: var(--bg); }
 .pane { position: absolute; inset: 0; display: none; flex-direction: column; min-height: 0; }
 .pane.active { display: flex; }
 
@@ -486,6 +492,54 @@ html.kb-open .status-bar { display: none; }
 .switch::after { content: ""; position: absolute; top: 3px; left: 3px; width: 24px; height: 24px; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.35); transition: transform .18s; }
 .switch:checked { background: var(--accent); }
 .switch:checked::after { transform: translateX(20px); }
+
+/* ---------- dev tools ---------- */
+.code-head .run-btn { color: var(--ok); }
+.code-head .run-btn svg { fill: currentColor; width: 16px; height: 16px; }
+.code-head .run-btn.dim { color: var(--faint); }
+.code-head .run-btn.dim svg { fill: none; }
+.sb-problems { gap: 8px; }
+.sb-problems .sb-err { color: var(--bad); }
+.sb-problems .sb-warn { color: var(--warn); }
+.sb-smarts.state-ready { color: var(--ok); }
+.sb-smarts.state-starting { color: var(--warn); }
+.sb-smarts.state-failed, .sb-smarts.state-stopped { color: var(--bad); }
+.result.problem { align-items: flex-start; }
+.p-err, .p-warn { flex: none; font-size: 15px; line-height: 1.3; }
+.p-err { color: var(--bad); } .p-warn { color: var(--warn); }
+.p-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.p-text b { font: 500 13.5px/1.35 var(--ui); white-space: normal; overflow-wrap: anywhere; }
+.p-text small { font: 12px var(--mono); color: var(--muted); }
+pre.cmd { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 30vh; overflow: auto; margin: 0; }
+.md-overlay { z-index: 40; }
+.md-scroll { flex: 1; overflow-y: auto; padding: 18px max(18px, env(safe-area-inset-right)) 40px max(18px, env(safe-area-inset-left)); }
+.md-body { max-width: 68ch; margin: 0 auto; font: 15.5px/1.65 var(--ui); color: var(--text); overflow-wrap: anywhere; }
+.md-body h1, .md-body h2, .md-body h3 { line-height: 1.25; margin: 1.4em 0 .5em; text-wrap: balance; }
+.md-body h1 { font-size: 1.7em; } .md-body h2 { font-size: 1.35em; border-bottom: 1px solid var(--line); padding-bottom: .25em; } .md-body h3 { font-size: 1.12em; }
+.md-body a { color: var(--accent); }
+.md-body code { font: .88em var(--mono); background: var(--bg-hover); padding: .12em .35em; border-radius: 4px; }
+.md-body pre { background: var(--bg-sunken); border: 1px solid var(--line); border-radius: 8px; padding: 12px; overflow-x: auto; }
+.md-body pre code { background: none; padding: 0; }
+.md-body blockquote { margin: 0; padding-left: 14px; border-left: 3px solid var(--line-strong); color: var(--muted); }
+.md-body table { border-collapse: collapse; display: block; overflow-x: auto; }
+.md-body th, .md-body td { border: 1px solid var(--line); padding: 6px 10px; }
+.md-body img { max-width: 100%; }
+
+/* ---------- screen: Live / Light ---------- */
+.kind-seg { grid-template-columns: 1fr 1fr; }
+.kind-seg button { display: flex; flex-direction: column; align-items: center; gap: 1px; padding: 8px 6px; min-height: 52px; }
+.kind-seg button b { font-size: 15px; }
+.kind-seg button small { font-size: 11.5px; font-weight: 500; color: var(--faint); }
+.kind-seg button.on small { color: var(--muted); }
+.lite-stage { position: absolute; inset: 0; background: #000; display: flex; align-items: center; justify-content: center; overflow: hidden; }
+.lite-img { max-width: 100%; max-height: 100%; object-fit: contain; touch-action: none; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; image-rendering: auto; }
+.lite-img:not([src]) { visibility: hidden; }
+.lite-refresh {
+  position: absolute; right: max(16px, env(safe-area-inset-right)); bottom: 16px; width: 54px; height: 54px; border-radius: 50%;
+  display: grid; place-items: center; background: var(--accent); color: var(--accent-ink); box-shadow: 0 6px 20px rgba(0,0,0,.45);
+}
+.lite-refresh:active { transform: scale(.94); }
+.lite-refresh svg { width: 24px; height: 24px; stroke-width: 2.2; }
 
 @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
 @media (min-width: 900px) {

@@ -88,8 +88,9 @@ net.createServer((sock) => {
         const val = (r << pf.rs) | (g << pf.gs) | (b << pf.bs);
         px.writeUInt32LE(val >>> 0, i);
       }
-      // a "window" block in the middle
-      for (let y = 120; y < 280; y++) for (let x = 180; x < 460; x++) px.writeUInt32LE(((235 << pf.rs) | (235 << pf.gs) | (240 << pf.bs)) >>> 0, (y * W + x) * 4);
+      // a "window" block in the middle (its color shifts each frame when animating)
+      const shade = process.env.FAKE_ANIMATE ? 200 + (frame * 7) % 50 : 235;
+      for (let y = 120; y < 280; y++) for (let x = 180; x < 460; x++) px.writeUInt32LE(((shade << pf.rs) | (235 << pf.gs) | (240 << pf.bs)) >>> 0, (y * W + x) * 4);
       const hdr = Buffer.alloc(16);
       hdr[0] = 0; hdr.writeUInt16BE(1, 2);
       hdr.writeUInt16BE(0, 4); hdr.writeUInt16BE(0, 6); hdr.writeUInt16BE(W, 8); hdr.writeUInt16BE(H, 10); hdr.writeInt32BE(0, 12);
@@ -100,7 +101,12 @@ net.createServer((sock) => {
       const type = (await read(1))[0];
       if (type === 0) { const b = await read(19); pf = { rs: b[13], gs: b[14], bs: b[15] }; log(`setpixelformat bpp=${b[3]} shifts=${b[13]},${b[14]},${b[15]}`); }
       else if (type === 2) { const b = await read(3); const n = b.readUInt16BE(1); await read(n * 4); }
-      else if (type === 3) { const b = await read(9); if (!b[0] || !sentFull) { sentFull = true; sendFrame(); } }
+      else if (type === 3) {
+        const b = await read(9);
+        log(`update-request incremental=${b[0]} x=${b.readUInt16BE(1)} y=${b.readUInt16BE(3)} w=${b.readUInt16BE(5)} h=${b.readUInt16BE(7)}`);
+        if (!b[0] || !sentFull) { sentFull = true; sendFrame(); }
+        else if (process.env.FAKE_ANIMATE) setTimeout(() => { if (!sock.destroyed) sendFrame(); }, 250);
+      }
       else if (type === 4) { const b = await read(7); log(`key ${b[0] ? 'down' : 'up'} 0x${b.readUInt32BE(3).toString(16)}`); }
       else if (type === 5) { const b = await read(5); log(`pointer mask=${b[0]} x=${b.readUInt16BE(1)} y=${b.readUInt16BE(3)}`); }
       else if (type === 6) { const b = await read(7); await read(b.readUInt32BE(3)); }

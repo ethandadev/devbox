@@ -41,11 +41,10 @@ const wrap = (fn) => (req, res) => Promise.resolve(fn(req, res)).catch((e) => {
   res.status(status).json({ error: message, code: e.code });
 });
 
-router.get('/list', wrap(async (req, res) => {
-  const abs = resolve(req.query.path);
+async function listDir(abs, limit = 2000) {
   const dirents = await fsp.readdir(abs, { withFileTypes: true });
   const entries = [];
-  await Promise.all(dirents.map(async (d) => {
+  await Promise.all(dirents.slice(0, limit).map(async (d) => {
     let type = d.isDirectory() ? 'dir' : 'file';
     if (d.isSymbolicLink()) {
       try { type = (await fsp.stat(path.join(abs, d.name))).isDirectory() ? 'dir' : 'file'; } catch { type = 'file'; }
@@ -53,7 +52,36 @@ router.get('/list', wrap(async (req, res) => {
     entries.push({ name: d.name, type, hidden: d.name.startsWith('.') });
   }));
   entries.sort((a, b) => (a.type === b.type ? a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }) : a.type === 'dir' ? -1 : 1));
-  res.json({ path: toRel(abs), entries });
+  return entries;
+}
+
+// Folders not worth reading ahead (huge or never browsed).
+const NO_AHEAD = new Set(['node_modules', '.git', 'Library', '.Trash', '.cache', '.npm', 'Pods', 'DerivedData', '.venv', 'venv', '__pycache__', 'target', 'build', 'dist', '.next']);
+
+// One folder, plus (with ahead=1) the contents of each of its subfolders, so
+// opening the next level in the file browser needs no round trip.
+router.get('/list', wrap(async (req, res) => {
+  const abs = resolve(req.query.path);
+  const entries = await listDir(abs);
+  const out = { path: toRel(abs), entries };
+  if (req.query.ahead === '1') {
+    out.ahead = {};
+    const subdirs = entries.filter((e) => e.type === 'dir' && !NO_AHEAD.has(e.name)).slice(0, 40);
+    await Promise.all(subdirs.map(async (e) => {
+      try { out.ahead[toRel(path.join(abs, e.name))] = await listDir(path.join(abs, e.name), 500); } catch {}
+    }));
+  }
+  res.json(out);
+}));
+
+// Several folders in one request (refreshing an expanded tree).
+router.post('/lists', wrap(async (req, res) => {
+  const paths = Array.isArray(req.body.paths) ? req.body.paths.slice(0, 200).map(String) : [];
+  const lists = {};
+  await Promise.all(paths.map(async (p) => {
+    try { lists[p] = await listDir(resolve(p)); } catch (e) { lists[p] = { error: e.code === 'ENOENT' ? 'Folder no longer exists.' : e.message }; }
+  }));
+  res.json({ lists });
 }));
 
 router.get('/stat', wrap(async (req, res) => {

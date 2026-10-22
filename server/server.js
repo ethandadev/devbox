@@ -23,6 +23,8 @@ const search = require('./search');
 const ports = require('./ports');
 const project = require('./project');
 const system = require('./system');
+const lsp = require('./lsp');
+const screenlite = require('./screenlite');
 
 const app = express();
 app.disable('x-powered-by');
@@ -81,7 +83,12 @@ app.use('/api/search', auth.requireAuth, search);
 app.use('/api/ports', auth.requireAuth, ports);
 app.use('/api/project', auth.requireAuth, project);
 app.use('/api/system', auth.requireAuth, system.router);
+app.use('/api/lsp', auth.requireAuth, lsp.router);
+app.use('/api/screen', auth.requireAuth, screenlite.router);
 app.use('/api', (req, res) => res.status(404).json({ error: 'Unknown endpoint' }));
+// Your files as plain web pages (HTML preview with working relative links).
+app.use('/files', auth.requireAuth, (req, res, next) => { res.setHeader('Cache-Control', 'no-cache'); res.removeHeader('Cross-Origin-Resource-Policy'); next(); },
+  express.static(config.root, { dotfiles: 'allow', index: ['index.html'], fallthrough: false }));
 
 // --- static ----------------------------------------------------------------
 const pkgDir = (name) => path.dirname(require.resolve(`${name}/package.json`));
@@ -90,6 +97,7 @@ app.use('/vendor/xterm', express.static(pkgDir('@xterm/xterm'), vendorOpts));
 app.use('/vendor/xterm-fit', express.static(pkgDir('@xterm/addon-fit'), vendorOpts));
 app.use('/vendor/xterm-links', express.static(pkgDir('@xterm/addon-web-links'), vendorOpts));
 app.use('/vendor/monaco', express.static(path.join(pkgDir('monaco-editor'), 'min'), vendorOpts));
+app.use('/vendor/marked', express.static(pkgDir('marked'), vendorOpts));
 app.use(express.static(path.join(__dirname, '..', 'public'), {
   setHeaders: (res, file) => {
     if (file.includes(`${path.sep}vendor${path.sep}`)) res.setHeader('Cache-Control', 'public, max-age=2592000');
@@ -100,6 +108,8 @@ app.use(express.static(path.join(__dirname, '..', 'public'), {
 // --- websockets ------------------------------------------------------------
 const termWss = new WebSocketServer({ noServer: true, perMessageDeflate: true });
 const vncWss = new WebSocketServer({ noServer: true, perMessageDeflate: false });
+const liteWss = new WebSocketServer({ noServer: true, perMessageDeflate: false, maxPayload: 1024 * 1024 });
+const lspWss = new WebSocketServer({ noServer: true, perMessageDeflate: true, maxPayload: 64 * 1024 * 1024 });
 const resolveDir = (rel) => files.resolve(rel);
 
 function onUpgrade(req, socket, head) {
@@ -110,11 +120,13 @@ function onUpgrade(req, socket, head) {
   }
   if (url.pathname === '/ws/term') termWss.handleUpgrade(req, socket, head, (ws) => terminal.attach(ws, url, resolveDir));
   else if (url.pathname === '/ws/screen') vncWss.handleUpgrade(req, socket, head, (ws) => vnc.handle(ws));
+  else if (url.pathname === '/ws/lite') liteWss.handleUpgrade(req, socket, head, (ws) => screenlite.handle(ws));
+  else if (url.pathname === '/ws/lsp') lspWss.handleUpgrade(req, socket, head, (ws) => lsp.handle(ws, url));
   else socket.destroy();
 }
 
 setInterval(() => {
-  for (const wss of [termWss, vncWss]) {
+  for (const wss of [termWss, vncWss, lspWss, liteWss]) {
     for (const ws of wss.clients) {
       if (ws.isAlive === false) { ws.terminate(); continue; }
       ws.isAlive = false;
@@ -122,7 +134,7 @@ setInterval(() => {
     }
   }
 }, 25000).unref();
-for (const wss of [termWss, vncWss]) {
+for (const wss of [termWss, vncWss, lspWss, liteWss]) {
   wss.on('connection', (ws) => { ws.isAlive = true; ws.on('pong', () => { ws.isAlive = true; }); });
 }
 

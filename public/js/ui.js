@@ -145,6 +145,7 @@ const ICONS = {
   clipboard: '<rect x="5" y="4" width="14" height="17" rx="2"/><path d="M9 4h6v3H9zM9 12h6M9 16h4"/>',
   history: '<path d="M4 12a8 8 0 1 0 2.3-5.7L4 8.6M4 4v4.6h4.6M12 8v4.5l3 2"/>',
   folder: '<path d="M4 6.5A1.5 1.5 0 0 1 5.5 5H10l2 2h6.5A1.5 1.5 0 0 1 20 8.5v9a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 4 17.5z"/>',
+  window: '<rect x="3" y="4.5" width="18" height="15" rx="2"/><path d="M3 9h18"/><circle cx="6" cy="6.8" r=".6" fill="currentColor"/><circle cx="8.4" cy="6.8" r=".6" fill="currentColor"/>',
   command: '<path d="M9 6a3 3 0 1 0-3 3h12a3 3 0 1 0-3-3v12a3 3 0 1 0 3-3H6a3 3 0 1 0 3 3z"/>',
 };
 export function icon(name) {
@@ -257,6 +258,24 @@ export function sheet(build) {
     const scrim = h('div', { class: 'sheet-scrim' }, panel);
     const done = (value) => { if (openSheet && openSheet.scrim === scrim) { scrim.remove(); openSheet = null; } resolve(value); };
     scrim.addEventListener('click', (e) => { if (e.target === scrim) done(null); });
+    // Drag the sheet down (from its top area) to dismiss, like a native sheet.
+    let startY = null, dy = 0;
+    panel.addEventListener('touchstart', (e) => {
+      const fromTop = e.touches[0].clientY - panel.getBoundingClientRect().top < 56;
+      if (fromTop && panel.scrollTop <= 0) { startY = e.touches[0].clientY; dy = 0; panel.style.transition = 'none'; }
+    }, { passive: true });
+    panel.addEventListener('touchmove', (e) => {
+      if (startY === null) return;
+      dy = Math.max(0, e.touches[0].clientY - startY);
+      panel.style.transform = `translateY(${dy}px)`;
+    }, { passive: true });
+    panel.addEventListener('touchend', () => {
+      if (startY === null) return;
+      startY = null;
+      panel.style.transition = 'transform .18s ease';
+      if (dy > 90) { panel.style.transform = 'translateY(100%)'; setTimeout(() => done(null), 160); }
+      else panel.style.transform = '';
+    });
     build(panel, done);
     root.append(scrim);
     openSheet = { scrim, done };
@@ -320,19 +339,37 @@ export async function copyText(text) {
 // does. Size the app to the visual viewport so the key bars sit right on top
 // of the keyboard and nothing hides behind it.
 export function trackViewport() {
+  const root = document.documentElement;
   const app = document.getElementById('app');
   const vv = window.visualViewport;
+  let last = '', frame = 0;
   const apply = () => {
-    const height = vv ? vv.height : window.innerHeight;
-    document.documentElement.style.setProperty('--app-h', `${height}px`);
-    if (vv) app.style.transform = `translateY(${vv.offsetTop}px)`;
-    const kb = vv ? window.innerHeight - vv.height > 120 : false;
-    document.documentElement.classList.toggle('kb-open', kb);
+    frame = 0;
+    const full = window.innerHeight;
+    const height = vv ? vv.height : full;
+    const top = vv ? Math.max(0, vv.offsetTop) : 0;
+    const kb = full - height > 120;
+    const sig = `${Math.round(height)}|${Math.round(top)}|${kb}`;
+    if (sig === last) return;                 // nothing changed: don't relayout
+    last = sig;
+    if (kb) {
+      // Keyboard up: fit the app exactly above it.
+      app.style.bottom = 'auto';
+      app.style.height = `${height}px`;
+      app.style.transform = top ? `translate3d(0, ${top}px, 0)` : '';
+    } else {
+      // Normally the app simply fills the screen (CSS inset: 0).
+      app.style.bottom = app.style.height = app.style.transform = '';
+    }
+    root.classList.toggle('kb-open', kb);
     window.dispatchEvent(new Event('devbox:layout'));
   };
-  if (vv) { vv.addEventListener('resize', apply); vv.addEventListener('scroll', apply); }
-  window.addEventListener('resize', apply);
-  window.addEventListener('orientationchange', () => setTimeout(apply, 250));
+  const schedule = () => { if (!frame) frame = requestAnimationFrame(apply); };
+  if (vv) { vv.addEventListener('resize', schedule); vv.addEventListener('scroll', schedule); }
+  window.addEventListener('resize', schedule);
+  window.addEventListener('orientationchange', () => setTimeout(schedule, 250));
+  // iOS sometimes scrolls the (fixed) page to reveal a focused field. Undo it.
+  window.addEventListener('scroll', () => { if (window.scrollY) window.scrollTo(0, 0); }, { passive: true });
   apply();
 }
 

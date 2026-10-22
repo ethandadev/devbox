@@ -229,4 +229,4 @@ function probe() {
   });
 }
 
-module.exports = { handle, probe, _loginToMac: loginToMac };
+module.exports = { handle, probe, loginToMac, Reader, friendly, _loginToMac: loginToMac };
