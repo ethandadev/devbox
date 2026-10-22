@@ -43,6 +43,24 @@ Open that link on your phone, then use Share → **Add to Home Screen** so it op
 
 **Optional:** `brew install ripgrep` makes code search much faster.
 
+### In mainland China
+
+github.com and registry.npmjs.org are usually blocked, so clone through a GitHub mirror and install from npmmirror:
+
+```sh
+git clone https://ghfast.top/https://github.com/ethandadev/devbox.git ~/devbox
+#   or: git clone https://gh-proxy.com/https://github.com/ethandadev/devbox.git ~/devbox
+cd ~/devbox
+npm install --registry=https://registry.npmmirror.com
+```
+
+To route all GitHub traffic (including the in-app **Update devbox** button) through the mirror:
+
+```sh
+git config --global url."https://ghfast.top/https://github.com/".insteadOf "https://github.com/"
+npm config set registry https://registry.npmmirror.com
+```
+
 ### Keep it running (and start after reboots)
 
 ```sh
