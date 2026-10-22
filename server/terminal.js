@@ -8,8 +8,37 @@
  * gets the recent output replayed, like tmux does.
  */
 const crypto = require('crypto');
+const fs = require('fs');
+const path = require('path');
 const pty = require('node-pty');
 const config = require('./config');
+
+// node-pty 1.1.0 ships its macOS helper program without the "executable"
+// permission, which makes every terminal fail with "posix_spawnp failed".
+// Repair it on startup so a fresh install or an update can't break terminals.
+function fixSpawnHelper() {
+  try {
+    const base = path.dirname(require.resolve('node-pty/package.json'));
+    for (const dir of ['prebuilds/darwin-arm64', 'prebuilds/darwin-x64', 'build/Release']) {
+      const helper = path.join(base, dir, 'spawn-helper');
+      if (!fs.existsSync(helper)) continue;
+      const mode = fs.statSync(helper).mode;
+      if ((mode & 0o111) !== 0o111) fs.chmodSync(helper, mode | 0o755);
+    }
+  } catch (e) {
+    console.error('  Could not fix node-pty spawn-helper permissions:', e.message);
+  }
+}
+fixSpawnHelper();
+
+// If $SHELL points somewhere that doesn't exist, fall back to a shell that does.
+function pickShell() {
+  for (const sh of [config.shell, '/bin/zsh', '/bin/bash', '/bin/sh']) {
+    try { fs.accessSync(sh, fs.constants.X_OK); return sh; } catch {}
+  }
+  return '/bin/sh';
+}
+const SHELL = pickShell();
 
 const MAX_SESSIONS = 8;
 const SCROLLBACK_BYTES = 400 * 1024;        // replayed on re-attach
@@ -19,7 +48,7 @@ const sessions = new Map();
 let counter = 0;
 
 function shellName() {
-  return config.shell.split('/').pop();
+  return SHELL.split('/').pop();
 }
 
 function createSession(cols, rows, opts = {}) {
@@ -36,7 +65,7 @@ function createSession(cols, rows, opts = {}) {
   });
   // -l = login shell, so PATH from ~/.zprofile (Homebrew etc.) is loaded even
   // when devbox itself was started by pm2/launchd with a bare environment.
-  const proc = pty.spawn(config.shell, ['-l'], {
+  const proc = pty.spawn(SHELL, ['-l'], {
     name: 'xterm-256color',
     cols: clamp(cols, 20, 400, 80),
     rows: clamp(rows, 5, 200, 24),

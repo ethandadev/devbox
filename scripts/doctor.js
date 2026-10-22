@@ -38,8 +38,23 @@ function getJSON(url) {
   if (major >= 18) ok(`Node.js ${process.versions.node}`);
   else { problems++; bad(`Node.js ${process.versions.node} is too old`, 'brew install node   (needs 18 or newer)'); }
 
-  try { require('node-pty'); ok('Terminal support (node-pty) loads'); }
-  catch (e) { problems++; bad('Terminal support (node-pty) failed to load', `rm -rf node_modules && npm install   (${e.message.split('\n')[0]})`); }
+  // Actually open a terminal, like devbox does (this also repairs the helper's permissions).
+  try {
+    require('../server/terminal');
+    const pty = require('node-pty');
+    const out = await new Promise((resolve, reject) => {
+      const p = pty.spawn('/bin/sh', ['-c', 'echo devbox-pty-ok'], { cols: 80, rows: 24, env: config.env });
+      let buf = '';
+      p.onData((d) => { buf += d; });
+      p.onExit(() => resolve(buf));
+      setTimeout(() => reject(new Error('timed out')), 5000);
+    });
+    if (out.includes('devbox-pty-ok')) ok('Terminals work');
+    else { problems++; bad('Terminal started but gave no output', 'rm -rf node_modules && npm install'); }
+  } catch (e) {
+    problems++;
+    bad(`Terminals don't work: ${e.message.split('\n')[0]}`, 'chmod +x node_modules/node-pty/prebuilds/darwin-*/spawn-helper   (or: rm -rf node_modules && npm install)');
+  }
 
   try { require('monaco-editor/package.json'); require('@xterm/xterm/package.json'); ok('Editor and terminal files are installed'); }
   catch { problems++; bad('Some packages are missing', 'npm install'); }

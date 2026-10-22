@@ -4,21 +4,66 @@ const SAVE_DELAY = 1000;     // autosave this long after you stop typing
 const POLL_MS = 4000;        // check the open file for changes made on the Mac
 
 let monacoPromise = null;
-export function loadMonaco() {
+// The editor is the biggest part of devbox (~4 MB, ~1 MB compressed). On a
+// slow or relayed Tailscale link a download can drop, and Monaco's loader
+// can't recover from a failed file. So: fetch the big files first, with
+// retries, into the browser cache (served with a 30-day cache header), then
+// let the loader pick them up from the cache.
+const MONACO_CORE = ['vs/loader.js', 'vs/editor/editor.main.js', 'vs/editor/editor.main.css'];
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+async function prefetch(path, onProgress) {
+  const url = '/vendor/monaco/' + path;
+  let lastError;
+  for (let attempt = 1; attempt <= 4; attempt++) {
+    try {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 90000);
+      const res = await fetch(url, { cache: 'force-cache', signal: ctrl.signal });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      await res.arrayBuffer();
+      clearTimeout(timer);
+      onProgress && onProgress();
+      return;
+    } catch (e) {
+      lastError = e.name === 'AbortError' ? new Error('timed out') : e;
+      await sleep(700 * attempt);
+    }
+  }
+  throw new Error(`Couldn't download the editor (${path.split('/').pop()}: ${lastError.message}). The connection to your Mac may be slow or dropping.`);
+}
+
+function describeLoadError(err) {
+  if (!err) return 'Unknown error.';
+  if (typeof Event !== 'undefined' && err instanceof Event) {
+    const src = err.target && (err.target.src || err.target.href);
+    return `Couldn't load ${src ? new URL(src).pathname.split('/').pop() : 'an editor file'} from your Mac. The connection may have dropped.`;
+  }
+  if (err.moduleId) return `Couldn't load editor part ${err.moduleId}${err.message ? `: ${err.message}` : ''}.`;
+  return err.message || String(err);
+}
+
+export function loadMonaco(onProgress) {
   if (monacoPromise) return monacoPromise;
-  monacoPromise = new Promise((resolve, reject) => {
-    const s = document.createElement('script');
-    s.src = '/vendor/monaco/vs/loader.js';
-    s.onerror = () => reject(new Error('Could not load the editor files from your Mac.'));
-    s.onload = () => {
-      // Absolute URL: Monaco's language workers (TypeScript, JSON, CSS, HTML)
-      // load from inside a worker, where a relative path can't be resolved.
-      const vs = new URL('/vendor/monaco/vs', location.href).href;
-      window.MonacoEnvironment = { baseUrl: new URL('/vendor/monaco/', location.href).href };
-      window.require.config({ paths: { vs } });
-      window.require(['vs/editor/editor.main'], () => resolve(window.monaco), (err) => reject(err));
-    };
-    document.head.append(s);
+  monacoPromise = (async () => {
+    let done = 0;
+    await Promise.all(MONACO_CORE.map((p) => prefetch(p, () => onProgress && onProgress(++done, MONACO_CORE.length))));
+    await new Promise((resolve, reject) => {
+      const s = document.createElement('script');
+      s.src = '/vendor/monaco/vs/loader.js';
+      s.onerror = (e) => reject(e);
+      s.onload = resolve;
+      document.head.append(s);
+    });
+    // Absolute URL: Monaco's language workers (TypeScript, JSON, CSS, HTML)
+    // load from inside a worker, where a relative path can't be resolved.
+    const vs = new URL('/vendor/monaco/vs', location.href).href;
+    window.MonacoEnvironment = { baseUrl: new URL('/vendor/monaco/', location.href).href };
+    window.require.config({ paths: { vs } });
+    return new Promise((resolve, reject) => window.require(['vs/editor/editor.main'], () => resolve(window.monaco), reject));
+  })().catch((err) => {
+    monacoPromise = null;
+    throw new Error(describeLoadError(err));
   });
   return monacoPromise;
 }
@@ -104,11 +149,18 @@ export class CodePane {
     if (this.editorPromise) return this.editorPromise;
     this.editorPromise = (async () => {
       let monaco;
-      try { monaco = await loadMonaco(); }
-      catch (e) {
-        this.loading.replaceChildren(h('h2', {}, 'The editor didn\'t load'), h('p', {}, e.message || String(e)),
-          h('button', { class: 'btn', type: 'button', onclick: () => location.reload() }, 'Reload'));
-        this.editorPromise = null; monacoPromise = null;
+      const msg = h('p', {}, 'Loading the editor…');
+      this.loading.replaceChildren(msg);
+      this.loading.hidden = false;
+      try {
+        monaco = await loadMonaco((n, total) => { msg.textContent = n < total ? `Downloading the editor from your Mac (${n}/${total})…` : 'Starting the editor…'; });
+      } catch (e) {
+        // The loader can't retry a failed file in place, so "Try again"
+        // reloads the page. Terminal sessions keep running on the Mac.
+        const retry = window.require && window.require.config ? () => location.reload() : () => { this.editorPromise = null; this.ensureEditor().catch(() => {}); };
+        this.loading.replaceChildren(h('h2', {}, 'The editor didn\'t load'), h('p', {}, e.message),
+          h('button', { class: 'btn btn-primary', type: 'button', onclick: retry }, 'Try again'));
+        this.editorPromise = null;
         throw e;
       }
       this.monaco = monaco;
