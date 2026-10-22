@@ -1,4 +1,4 @@
-import { api, qs, h, icon, iconButton, menu, confirm, toast, store, copyText, projectChip } from './ui.js';
+import { api, qs, h, icon, iconButton, menu, confirm, toast, store, copyText, projectChip, skeleton } from './ui.js';
 
 export class RunPane {
   constructor(el, ctx) {
@@ -12,8 +12,8 @@ export class RunPane {
     ctx.topActions.append(this.top);
 
     this.body = h('div', { class: 'scroll-pane' });
-    this.scriptsEl = h('div');
-    this.serversEl = h('div', { class: 'list' });
+    this.scriptsEl = h('div', {}, skeleton(3));
+    this.serversEl = h('div', { class: 'list' }, skeleton(2));
     this.overlay = h('div', { class: 'overlay preview', hidden: true });
     this.body.append(
       h('div', { class: 'pane-bar' }, projectChip(ctx)),
@@ -33,10 +33,20 @@ export class RunPane {
   onResume() { if (this.visible) this.refresh(); }
   refresh() { this.loadScripts(); this.loadServers(); }
 
+  updateTitle() {
+    const p = this.ctx.project.get();
+    const dev = this.servers.filter((s) => !s.system).length;
+    this.ctx.setTitle('run', { title: p ? p.split('/').pop() : 'Run', sub: dev ? `${dev} server${dev === 1 ? '' : 's'} running` : 'No servers running', onClick: () => this.pickProject() });
+  }
+  async pickProject() { const { pickProject } = await import('./ui.js'); pickProject(this.ctx); }
+
   // ---------- scripts ----------
   async loadScripts() {
+    this.updateTitle();
     let r;
-    try { r = await api('/api/project/scripts?' + qs({ path: this.ctx.project.get() })); }
+    const code = this.ctx.panes().code;
+    const scope = this.ctx.project.get() || (code && code.active ? code.active.split('/').slice(0, -1).join('/') : '');
+    try { r = await api('/api/project/scripts?' + qs({ path: scope })); }
     catch (e) { this.scriptsEl.replaceChildren(h('p', { class: 'pane-msg' }, e.message)); return; }
     if (!r.groups.length) {
       this.scriptsEl.replaceChildren(h('p', { class: 'pane-msg' }, 'No package.json or Makefile in this project. Pick a project with the folder button above, or run commands in the terminal.'));
@@ -66,6 +76,7 @@ export class RunPane {
     this.canForward = r.canForward;
     const dev = r.servers.filter((s) => !s.system);
     this.ctx.setBadge('run', dev.length > 0);
+    this.updateTitle();
     if (this.visible) this.renderServers();
   }
 

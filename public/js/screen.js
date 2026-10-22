@@ -38,6 +38,7 @@ export class ScreenPane {
     this.keybar.hidden = true;
     el.append(this.setup, this.view, this.keybar);
     this.wireCatcher();
+    ctx.setTitle('screen', { title: ctx.status.host, sub: 'Not connected' });
   }
 
   // ---------- setup screen ----------
@@ -185,6 +186,7 @@ export class ScreenPane {
 
   setLive(on) {
     this.isLive = on;
+    this.ctx.setTitle('screen', { title: this.ctx.status.host, sub: on ? (this.desktopName ? `Connected · ${this.desktopName}` : 'Connected') : 'Not connected' });
     this.setup.hidden = on;
     this.view.hidden = !on;
     this.keybar.hidden = !on;

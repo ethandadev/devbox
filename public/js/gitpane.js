@@ -1,4 +1,4 @@
-import { api, qs, h, icon, iconButton, menu, prompt, confirm, sheet, toast, timeAgo, splitPath, projectChip, pickProject } from './ui.js';
+import { api, qs, h, icon, iconButton, menu, prompt, confirm, sheet, toast, timeAgo, splitPath, projectChip, pickProject, skeleton, fileIcon } from './ui.js';
 
 const STATUS_NAME = { M: 'Modified', A: 'Added', D: 'Deleted', R: 'Renamed', C: 'Copied', U: 'Untracked', T: 'Type changed', '?': 'Untracked' };
 
@@ -26,25 +26,46 @@ export class GitPane {
 
   get repo() { return this.data && this.data.repo; }
 
+  // Which folder to look at: the chosen project, or, when no project is
+  // chosen, the folder of the file open in the editor.
+  scope() {
+    const p = this.ctx.project.get();
+    if (p) return p;
+    const code = this.ctx.panes().code;
+    return code && code.active ? code.active.split('/').slice(0, -1).join('/') : '';
+  }
+
   show() { this.visible = true; this.refresh(true); }
   hide() { this.visible = false; }
   onResume() { if (this.visible) this.refresh(); }
 
+  // Title in the top bar + let the editor's status bar show the branch.
+  publish(d) {
+    const sync = [d.behind ? `↓${d.behind}` : '', d.ahead ? `↑${d.ahead}` : ''].filter(Boolean).join(' ');
+    const n = d.repo ? d.staged.length + d.changes.length + d.conflicts.length : 0;
+    this.ctx.setTitle('git', d.repo
+      ? { title: d.name, sub: [d.detached ? 'detached HEAD' : d.branch, sync, n ? `${n} change${n === 1 ? '' : 's'}` : 'clean'].filter(Boolean).join(' · '), onClick: () => pickProject(this.ctx) }
+      : { title: 'Git', sub: 'Not a repository', onClick: () => pickProject(this.ctx) });
+    window.dispatchEvent(new CustomEvent('devbox:git', { detail: { branch: d.repo ? (d.branch || 'detached') : null } }));
+  }
+
   async refreshBadge() {
     if (!this.ctx.status.features.git) return;
     try {
-      const d = await api('/api/git/status?' + qs({ path: this.ctx.project.get() }));
+      const d = await api('/api/git/status?' + qs({ path: this.scope() }));
       this.ctx.setBadge('git', !!(d.repo && (d.staged.length || d.changes.length || d.conflicts.length)));
+      this.publish(d);
     } catch {}
   }
 
   async refresh(showSpinner = false) {
     if (!this.ctx.status.features.git) { this.renderNoGit(); return; }
-    if (showSpinner && !this.data) this.body.replaceChildren(h('p', { class: 'pane-msg' }, 'Reading repository…'));
+    if (showSpinner && !this.data) this.body.replaceChildren(skeleton(6));
     try {
-      const d = await api('/api/git/status?' + qs({ path: this.ctx.project.get() }));
+      const d = await api('/api/git/status?' + qs({ path: this.scope() }));
       this.data = d;
       this.ctx.setBadge('git', !!(d.repo && (d.staged.length || d.changes.length || d.conflicts.length)));
+      this.publish(d);
       if (!d.repo) return this.renderNotRepo();
       this.render();
       if (showSpinner || !this.log) this.loadLog();
@@ -282,6 +303,7 @@ export class GitPane {
           const [dir, name] = splitPath(f.path);
           return h('div', { class: 'file-row', role: 'button', tabindex: 0, onclick: () => { done(null); this.openDiff(f, 'commit', c); } },
             h('span', { class: `st st-${f.status}` }, f.status),
+            fileIcon(name),
             h('span', { class: 'fr-name' }, h('b', {}, name), dir ? h('small', {}, dir) : null));
         })),
         h('div', { class: 'actions' }, h('button', { class: 'btn', type: 'button', onclick: () => done(null) }, 'Close')));

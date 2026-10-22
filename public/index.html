@@ -36,9 +36,13 @@
 
 <div id="app" hidden>
   <header class="topbar">
-    <button id="host-btn" class="host" aria-label="Connection details">
+    <button id="settings-btn" class="settings-btn" type="button" aria-label="Settings and connection">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4" width="17" height="11" rx="1.6"/><path d="M8.5 19.5h7M12 15v4.5"/></svg>
       <span id="conn-dot" class="dot" data-state="connecting"></span>
-      <span id="host-name" class="host-name">mac</span>
+    </button>
+    <button id="title-btn" class="title-btn" type="button">
+      <span class="t-main"><span id="title-main">devbox</span><svg id="title-chev" class="t-chev" viewBox="0 0 24 24" aria-hidden="true" hidden><path d="M6 9l6 6 6-6"/></svg></span>
+      <span id="title-sub" class="t-sub"></span>
     </button>
     <div id="top-actions" class="top-actions"></div>
   </header>

@@ -1,4 +1,4 @@
-import { api, qs, h, icon, iconButton, key, menu, prompt, confirm, store, toast, copyText, sheet, splitPath } from './ui.js';
+import { api, qs, h, icon, iconButton, key, menu, prompt, confirm, store, toast, copyText, sheet, splitPath, fileIcon } from './ui.js';
 
 const SAVE_DELAY = 1000;     // autosave this long after you stop typing
 const POLL_MS = 4000;        // check the open file for changes made on the Mac
@@ -112,6 +112,12 @@ export class CodePane {
     this.imageView = h('div', { class: 'image-view', hidden: true });
     this.wrap = h('div', { class: 'editor-wrap' }, this.editorHost, this.imageView, this.empty, this.loading);
     this.empty.hidden = true;
+    // VS Code-style status bar: language, cursor position, indentation, branch.
+    this.sbLang = h('button', { class: 'sb-item', type: 'button', onclick: () => this.languageMenu() });
+    this.sbPos = h('button', { class: 'sb-item', type: 'button', onclick: () => this.gotoLine() });
+    this.sbIndent = h('span', { class: 'sb-item' });
+    this.sbBranch = h('button', { class: 'sb-item sb-branch', type: 'button', onclick: () => ctx.switchTab('git') });
+    this.statusBar = h('div', { class: 'status-bar', hidden: true }, this.sbBranch, h('span', { class: 'sb-gap' }), this.sbPos, this.sbIndent, this.sbLang);
 
     // drawer
     this.crumbs = h('div', { class: 'crumbs' });
@@ -134,7 +140,9 @@ export class CodePane {
     this.uploadInput.addEventListener('change', () => this.upload([...this.uploadInput.files]));
     el.append(this.uploadInput);
 
-    el.append(this.head, this.banner, this.wrap, this.buildKeybar(), this.scrim, this.drawer);
+    el.append(this.head, this.banner, this.wrap, this.statusBar, this.buildKeybar(), this.scrim, this.drawer);
+    ctx.project.onChange(() => this.updateTitle());
+    window.addEventListener('devbox:git', (e) => { this.branch = e.detail && e.detail.branch; this.updateStatusBar(); });
 
     setInterval(() => this.poll(), POLL_MS);
     window.addEventListener('beforeunload', (e) => { if (this.anyDirty()) { this.flushAll(); e.preventDefault(); } });
@@ -188,8 +196,8 @@ export class CodePane {
         fontFamily: '"SF Mono", ui-monospace, Menlo, monospace',
         fontSize: store.get('code.fontSize', phone ? 13 : 14),
         lineHeight: 1.55,
-        minimap: { enabled: !phone },
-        wordWrap: phone ? 'on' : 'off',
+        minimap: { enabled: store.get('code.minimap', !phone) },
+        wordWrap: store.get('code.wrap', phone) ? 'on' : 'off',
         lineNumbersMinChars: phone ? 3 : 4,
         glyphMargin: false,
         folding: !phone,
@@ -205,7 +213,10 @@ export class CodePane {
         tabSize: 2,
       });
       this.editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => this.save(this.active, { now: true }));
+      this.editor.onDidChangeCursorPosition(() => this.updateStatusBar());
+      this.editor.onDidChangeModel(() => this.updateStatusBar());
       this.loading.hidden = true;
+      this.updateTitle();
       await this.restoreTabs();
       return this.editor;
     })();
@@ -301,6 +312,7 @@ export class CodePane {
     this.updateSaveState();
     this.empty.hidden = true;
     this.highlightTree();
+    this.updateStatusBar();
     this.checkActive();
   }
 
@@ -319,16 +331,70 @@ export class CodePane {
       this.active = null;
       const next = this.order[Math.min(i, this.order.length - 1)];
       if (next) this.activate(next);
-      else { this.editor.setModel(null); this.imageView.hidden = true; this.renderTabs(); this.renderBanner(); this.updateSaveState(); this.empty.hidden = false; store.remove('code.active'); }
+      else { this.editor.setModel(null); this.imageView.hidden = true; this.renderTabs(); this.renderBanner(); this.updateSaveState(); this.updateStatusBar(); this.empty.hidden = false; store.remove('code.active'); }
     } else this.renderTabs();
   }
 
   persistTabs() { store.set('code.tabs', this.order); }
 
+  updateTitle() {
+    const f = this.active && this.files.get(this.active);
+    const projectName = this.ctx.project.get().split('/').pop() || this.ctx.status.rootName || '~';
+    if (!f) { this.ctx.setTitle('code', { title: projectName === '~' ? 'Code' : projectName, sub: 'No file open', onClick: () => this.toggleDrawer(true) }); return; }
+    const [dir] = splitPath(f.path);
+    const proj = this.ctx.project.get();
+    const relDir = proj && (dir === proj || dir.startsWith(proj + '/')) ? dir.slice(proj.length).replace(/^\//, '') : dir;
+    this.ctx.setTitle('code', { title: baseName(f.path), sub: relDir ? `${projectName} / ${relDir}` : projectName, onClick: () => this.toggleDrawer(true), dirty: this.isDirty(f) });
+  }
+
+  updateStatusBar() {
+    const f = this.active && this.files.get(this.active);
+    const show = !!(f && f.model && this.editor);
+    this.statusBar.hidden = !show;
+    if (!show) return;
+    const pos = this.editor.getPosition();
+    const sel = this.editor.getSelection();
+    const selLen = sel && !sel.isEmpty() ? f.model.getValueInRange(sel).length : 0;
+    this.sbPos.textContent = pos ? `Ln ${pos.lineNumber}, Col ${pos.column}${selLen ? ` (${selLen} selected)` : ''}` : '';
+    const o = f.model.getOptions();
+    this.sbIndent.textContent = o.insertSpaces ? `Spaces: ${o.indentSize}` : `Tab: ${o.tabSize}`;
+    const lang = this.monaco.languages.getLanguages().find((l) => l.id === f.model.getLanguageId());
+    this.sbLang.textContent = (lang && lang.aliases && lang.aliases[0]) || f.model.getLanguageId();
+    this.sbBranch.hidden = !this.branch;
+    this.sbBranch.replaceChildren(icon('branch'), h('span', {}, this.branch || ''));
+  }
+
+  async languageMenu() {
+    const f = this.active && this.files.get(this.active);
+    if (!f || !f.model) return;
+    const common = ['plaintext', 'javascript', 'typescript', 'python', 'html', 'css', 'json', 'markdown', 'shell', 'yaml', 'go', 'rust', 'java', 'cpp', 'swift', 'ruby', 'php', 'sql', 'xml', 'dockerfile'];
+    const langs = this.monaco.languages.getLanguages().filter((l) => common.includes(l.id)).sort((a, b) => common.indexOf(a.id) - common.indexOf(b.id));
+    const cur = f.model.getLanguageId();
+    const choice = await menu('Language', langs.map((l) => ({ label: (l.aliases && l.aliases[0]) || l.id, value: l.id, current: l.id === cur })));
+    if (choice) { this.monaco.editor.setModelLanguage(f.model, choice); this.updateStatusBar(); }
+  }
+
+  async gotoLine() {
+    const f = this.active && this.files.get(this.active);
+    if (!f || !f.model) return;
+    const n = await prompt('Go to line', { placeholder: `1 – ${f.model.getLineCount()}`, ok: 'Go' });
+    const line = parseInt(n, 10);
+    if (line) this.reveal(f.path, line, 1);
+  }
+
+  // Settings screen hooks
+  getFontSize() { return store.get('code.fontSize', window.matchMedia('(max-width: 700px)').matches ? 13 : 14); }
+  setFontSize(n) { store.set('code.fontSize', n); if (this.editor) this.editor.updateOptions({ fontSize: n }); }
+  getWordWrap() { return store.get('code.wrap', window.matchMedia('(max-width: 700px)').matches); }
+  setWordWrap(on) { store.set('code.wrap', on); if (this.editor) this.editor.updateOptions({ wordWrap: on ? 'on' : 'off' }); }
+  getMinimap() { return store.get('code.minimap', !window.matchMedia('(max-width: 700px)').matches); }
+  setMinimap(on) { store.set('code.minimap', on); if (this.editor) this.editor.updateOptions({ minimap: { enabled: on } }); }
+
   renderTabs() {
     this.tabsEl.replaceChildren(...this.order.map((p) => {
       const f = this.files.get(p);
       const t = h('div', { class: 'tab' + (p === this.active ? ' active' : '') + (f && this.isDirty(f) ? ' dirty' : ''), role: 'tab', title: p },
+        fileIcon(baseName(p)),
         h('span', { class: 'name', onclick: () => this.activate(p) }, baseName(p)),
         h('button', { class: 'close', type: 'button', 'aria-label': 'Close ' + baseName(p), onclick: (e) => { e.stopPropagation(); this.close(p); } }, icon('x')));
       t.addEventListener('click', () => this.activate(p));
@@ -395,6 +461,7 @@ export class CodePane {
     this.saveState.dataset.state = state;
     this.saveState.textContent = text;
     this.saveState.title = f && f.error ? f.error : '';
+    this.updateTitle();
   }
 
   renderBanner() {
@@ -520,6 +587,7 @@ export class CodePane {
       const open = isDir && this.expanded.has(path);
       const row = h('div', { class: `node ${isDir ? 'dir' : 'file'}${open ? ' open' : ''}${e.hidden ? ' hidden-file' : ''}`, role: 'treeitem', dataset: { path }, style: `padding-left:${4 + depth * 14}px` },
         h('span', { class: 'twisty' }, isDir ? icon('chevron') : null),
+        fileIcon(e.name, isDir ? 'dir' : 'file', open),
         h('button', { class: 'label', type: 'button' }, e.name),
         h('button', { class: 'more', type: 'button', 'aria-label': `Options for ${e.name}` }, icon('more')));
       row.querySelector('.label').addEventListener('click', () => (isDir ? this.toggleFolder(path, row, depth) : this.pick(path)));
@@ -671,23 +739,16 @@ export class CodePane {
       const action = this.editor.getAction('editor.action.formatDocument');
       if (action && action.isSupported()) { await action.run(); toast('Formatted'); }
       else toast('No formatter for this kind of file. Try your project\'s formatter in the terminal.');
-    } else if (choice === 'goto') {
-      const n = await prompt('Go to line', { placeholder: `1 – ${f.model.getLineCount()}`, ok: 'Go' });
-      const line = parseInt(n, 10);
-      if (line) this.reveal(f.path, line, 1);
-    } else if (choice === 'replace') { this.editor.focus(); this.editor.getAction('editor.action.startFindReplaceAction').run(); }
+    } else if (choice === 'goto') this.gotoLine(); else if (choice === 'replace') { this.editor.focus(); this.editor.getAction('editor.action.startFindReplaceAction').run(); }
     else if (choice === 'search') this.searchSheet('text');
     else if (choice === 'download') this.download(f.path);
     else if (choice === 'save') this.save(f.path, { now: true, force: false });
     else if (choice === 'reload') {
       if (this.isDirty(f) && !(await confirm('Discard your unsaved changes?', 'This loads the version saved on your Mac.', { ok: 'Discard', danger: true }))) return;
       this.reloadFromDisk(f.path, { discard: true });
-    } else if (choice === 'wrap') this.editor.updateOptions({ wordWrap: wrap === 'off' ? 'on' : 'off' });
-    else if (choice === 'bigger' || choice === 'smaller') {
-      const n = Math.max(10, Math.min(24, size + (choice === 'bigger' ? 1 : -1)));
-      store.set('code.fontSize', n);
-      this.editor.updateOptions({ fontSize: n });
-    } else if (choice === 'close') this.close(f.path);
+    } else if (choice === 'wrap') this.setWordWrap(wrap === 'off');
+    else if (choice === 'bigger' || choice === 'smaller') this.setFontSize(Math.max(10, Math.min(24, size + (choice === 'bigger' ? 1 : -1))));
+    else if (choice === 'close') this.close(f.path);
   }
 
   // ---------- search & quick open ----------
@@ -742,7 +803,7 @@ export class CodePane {
               info.textContent = r.results.length ? (q ? `${r.results.length === 60 ? 'Top 60' : r.results.length} of ${r.total} files` : `${r.total} files · type to filter`) : `No files match “${q}”.`;
               results.replaceChildren(...r.results.map((x) => {
                 const [dir, name] = splitPath(x.rel);
-                return h('button', { class: 'result', type: 'button', onclick: () => pick(x.path) }, h('span', { class: 'r-name' }, name), h('span', { class: 'r-dir' }, dir));
+                return h('button', { class: 'result', type: 'button', onclick: () => pick(x.path) }, fileIcon(name), h('span', { class: 'r-name' }, name), h('span', { class: 'r-dir' }, dir));
               }));
             } else {
               const r = await api('/api/search/text?' + qs({ path: scope, q, case: caseSensitive ? 1 : 0, regex: regex ? 1 : 0 }), { timeout: 30000 });

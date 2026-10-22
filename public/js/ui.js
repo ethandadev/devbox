@@ -1,5 +1,47 @@
 // Small shared helpers: API calls, bottom sheets, toasts, icons, storage.
 
+// Safari only gives pages a clipboard API over HTTPS. devbox runs on plain
+// http:// over Tailscale, so the editor's Copy would crash. Provide a stand-in
+// that copies the old-fashioned way (a hidden text box + "copy" command).
+function legacyCopy(text) {
+  const prev = document.activeElement;
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  ta.setAttribute('readonly', '');
+  ta.style.cssText = 'position:fixed;top:0;left:0;width:1px;height:1px;opacity:0;font-size:16px';
+  document.body.appendChild(ta);
+  ta.select();
+  ta.setSelectionRange(0, text.length);
+  let ok = false;
+  try { ok = document.execCommand('copy'); } catch {}
+  ta.remove();
+  if (prev && prev.focus) try { prev.focus({ preventScroll: true }); } catch {}
+  return ok;
+}
+if (!navigator.clipboard) {
+  const blocked = () => new DOMException('Reading the clipboard needs HTTPS. Use your keyboard\'s Paste instead.', 'NotAllowedError');
+  const shim = {
+    async writeText(text) { if (!legacyCopy(String(text))) throw new DOMException('Copy was blocked by the browser.', 'NotAllowedError'); },
+    async write(items) {
+      for (const item of items || []) {
+        const type = (item.types || []).find((t) => t === 'text/plain') || (item.types || [])[0];
+        if (!type) continue;
+        const data = await item.getType(type);
+        return shim.writeText(typeof data === 'string' ? data : await data.text());
+      }
+    },
+    async readText() { throw blocked(); },
+    async read() { throw blocked(); },
+  };
+  try { Object.defineProperty(Navigator.prototype, 'clipboard', { get: () => shim, configurable: true }); } catch {}
+}
+if (typeof window.ClipboardItem === 'undefined') {
+  window.ClipboardItem = class ClipboardItem {
+    constructor(data) { this._data = data; this.types = Object.keys(data); }
+    async getType(type) { return await this._data[type]; }
+  };
+}
+
 // Let UI code write `cond ? node : null` anywhere: DOM insertion skips empty
 // values instead of printing the word "null".
 for (const proto of [Element.prototype, DocumentFragment.prototype]) {
@@ -120,10 +162,48 @@ export function iconButton(name, label, onClick, extra = {}) {
   return b;
 }
 
+// ---------- file type icons ----------
+// A small colored tag per file type, like an IDE's file icons.
+const FILE_TYPES = [
+  [/\.(js|mjs|cjs)$/i, 'JS', '#e8c547'], [/\.jsx$/i, 'JSX', '#5cc8d0'], [/\.tsx?$/i, 'TS', '#4f9ce8'], [/\.d\.ts$/i, 'TS', '#4f9ce8'],
+  [/\.py$/i, 'PY', '#6aa8f0'], [/\.(rb|erb)$/i, 'RB', '#ef6b6b'], [/\.go$/i, 'GO', '#5cc8d0'], [/\.rs$/i, 'RS', '#e09157'],
+  [/\.(java|kt|kts)$/i, 'JV', '#e09157'], [/\.swift$/i, 'SW', '#f07a4a'], [/\.(c|h)$/i, 'C', '#8cbcf5'], [/\.(cpp|cc|hpp|cxx)$/i, 'C++', '#8cbcf5'],
+  [/\.cs$/i, 'C#', '#9d7cd8'], [/\.php$/i, 'PHP', '#9d9fd8'], [/\.lua$/i, 'LUA', '#6aa8f0'], [/\.(sh|bash|zsh|fish)$/i, '$', '#7ee0a5'],
+  [/\.html?$/i, '<>', '#ef8a5b'], [/\.(css|scss|sass|less)$/i, '#', '#c792ea'], [/\.(vue|svelte|astro)$/i, 'V', '#56c98a'],
+  [/\.json5?$/i, '{}', '#e8c547'], [/\.(ya?ml|toml|ini|conf|cfg)$/i, '⚙', '#a0a7b4'], [/\.(md|mdx|markdown)$/i, 'M↓', '#8cbcf5'],
+  [/\.(txt|log)$/i, '≡', '#a0a7b4'], [/\.(png|jpe?g|gif|webp|svg|ico|bmp|avif|heic)$/i, '▣', '#c792ea'], [/\.(csv|tsv)$/i, '▤', '#56c98a'],
+  [/\.(sql|db|sqlite)$/i, 'DB', '#e8b04a'], [/\.(zip|tar|gz|tgz|rar|7z)$/i, 'ZIP', '#a0a7b4'], [/\.lock$/i, '🔒', '#6c727d'],
+  [/^(dockerfile|.*\.dockerfile)$/i, 'DK', '#4f9ce8'], [/^makefile$/i, 'MK', '#e09157'], [/^\.env/i, 'ENV', '#e8c547'],
+  [/^\.git(ignore|attributes|modules)$/i, 'GIT', '#ef6b6b'], [/^(license|licence)(\..*)?$/i, '©', '#e8c547'], [/^readme(\..*)?$/i, 'i', '#6aa8f0'],
+  [/^package\.json$/i, 'npm', '#ef6b6b'],
+];
+export function fileIcon(name, kind = 'file', open = false) {
+  if (kind === 'dir') {
+    const s = icon('folder');
+    s.classList.add('ficon', 'ficon-dir');
+    if (open) s.classList.add('open');
+    return s;
+  }
+  let label = '', color = '#7d8490';
+  for (const [re, l, c] of FILE_TYPES) if (re.test(name)) { label = l; color = c; }
+  const tag = h('span', { class: 'ficon', 'aria-hidden': 'true' }, label || '·');
+  tag.style.setProperty('--fc', color);
+  if (label.length >= 3) tag.classList.add('narrow');
+  return tag;
+}
+
+// Placeholder rows while a list loads.
+export function skeleton(rows = 4) {
+  return h('div', { class: 'skeleton', 'aria-label': 'Loading', role: 'status' },
+    ...Array.from({ length: rows }, (_, i) => h('div', { class: 'sk-row' }, h('i', { class: 'sk-dot' }), h('i', { class: 'sk-line', style: `width:${55 + ((i * 17) % 35)}%` }))));
+}
+
 // ---------- toasts ----------
 // toast('Saved') or toast('Committed', 'ok', { label: 'Push', onClick })
 export function toast(message, kind = '', action = null) {
-  const el = h('div', { class: 'toast ' + kind, role: 'status' }, h('span', {}, message));
+  const lead = kind === 'ok' ? icon('check') : kind === 'bad' ? icon('x') : null;
+  if (lead) lead.classList.add('toast-icon');
+  const el = h('div', { class: 'toast ' + kind, role: 'status' }, lead, h('span', {}, message));
   if (action) el.append(h('button', { class: 'toast-action', type: 'button', onclick: () => { el.remove(); action.onClick(); } }, action.label));
   document.getElementById('toast-root').append(el);
   setTimeout(() => el.remove(), action ? 6000 : kind === 'bad' ? 5500 : 2600);
@@ -180,7 +260,7 @@ export function sheet(build) {
     build(panel, done);
     root.append(scrim);
     openSheet = { scrim, done };
-    const first = panel.querySelector('input, textarea');
+    const first = panel.querySelector('input:not([type=checkbox]):not([type=radio]):not([data-autofocus=no]), textarea');
     if (first) setTimeout(() => { first.focus(); if (first.select && first.dataset.select !== 'no') first.select(); }, 60);
   });
 }
