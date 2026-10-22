@@ -124,6 +124,7 @@ To require an access code anyway, start with `DEVBOX_AUTH=1 npm start` (or set y
 
 | Variable | Default | What it does |
 |---|---|---|
+| Blur at the top or a dark bar at the bottom of the Home Screen app (iOS 26.1+) | iOS reads the status-bar style only when the app is added. After updating, **delete the devbox icon and add it again** (Safari → Share → Add to Home Screen). |
 | `PORT` | `7111` | Port devbox uses |
 | `DEVBOX_ROOT` | your home folder | Folder the editor and git can open |
 | `DEVBOX_SHELL` | your login shell | Shell for terminals |
